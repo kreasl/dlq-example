@@ -1,0 +1,120 @@
+service: dlq-example
+
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: nodejs18.x
+  stage: ${opt:stage, 'dev'}
+  region: ${opt:region, 'eu-central-1'}
+  deploymentMethod: direct # Use direct deployment instead of CloudFormation
+  httpApi:
+    cors: true
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - sqs:SendMessage
+            - sqs:ReceiveMessage
+            - sqs:DeleteMessage
+            - sqs:GetQueueAttributes
+          Resource:
+            - !GetAtt TaskQueue.Arn
+            - !GetAtt TaskDLQ.Arn
+        - Effect: Allow
+          Action:
+            - dynamodb:PutItem
+            - dynamodb:GetItem
+            - dynamodb:UpdateItem
+            - dynamodb:Query
+            - dynamodb:Scan
+          Resource:
+            - !GetAtt TaskFailureTable.Arn
+        - Effect: Allow
+          Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            - logs:DescribeLogStreams
+          Resource: "arn:aws:logs:*:*:*"
+
+functions:
+  submitTask:
+    handler: src/taskSubmission.handler
+    environment:
+      TASK_QUEUE_URL: !Ref TaskQueue
+    events:
+      - httpApi:
+          path: /tasks
+          method: post
+          
+  processTask:
+    handler: src/taskProcessor.handler
+    environment:
+      TASK_QUEUE_URL: !Ref TaskQueue
+      TASK_FAILURE_TABLE: !Ref TaskFailureTable
+      FAILURE_PERCENTAGE: 30
+    events:
+      - sqs:
+          arn:
+            Fn::GetAtt:
+              - TaskQueue
+              - Arn
+          batchSize: 1
+          functionResponseType: ReportBatchItemFailures
+          
+  monitorDlq:
+    handler: src/dlqMonitor.handler
+    description: Monitors the Dead Letter Queue and logs details of failed tasks
+    logRetentionInDays: 14
+    environment:
+      STAGE: ${self:provider.stage}
+    events:
+      - sqs:
+          arn:
+            Fn::GetAtt:
+              - TaskDLQ
+              - Arn
+          batchSize: 5
+
+resources:
+  Resources:
+    # Dead Letter Queue for failed tasks
+    TaskDLQ:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: ${self:service}-${self:provider.stage}-tasks-dlq
+        MessageRetentionPeriod: 1209600 # 14 days in seconds
+    
+    # Main Task Queue with retry policy and DLQ redirection
+    TaskQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: ${self:service}-${self:provider.stage}-tasks
+        VisibilityTimeout: 60 # seconds
+        MessageRetentionPeriod: 1209600 # 14 days in seconds
+        # Configure redirection to DLQ after max retries
+        RedrivePolicy:
+          deadLetterTargetArn:
+            Fn::GetAtt:
+              - TaskDLQ
+              - Arn
+          # maxReceiveCount of 3 means: original attempt + 2 retries
+          maxReceiveCount: 3
+          
+    # DynamoDB table for tracking task failures
+    TaskFailureTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:service}-${self:provider.stage}-task-failures
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: taskId
+            AttributeType: S
+        KeySchema:
+          - AttributeName: taskId
+            KeyType: HASH
+
+plugins:
+  - serverless-offline
