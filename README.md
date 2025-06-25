@@ -67,13 +67,8 @@ To deploy this project, you need AWS credentials with the following permissions:
 #### Minimum IAM Policy
 
 Create an IAM user with the following managed policies:
-- `AWSLambdaFullAccess`
-- `AmazonAPIGatewayAdministrator`
-- `AmazonSQSFullAccess`
-- `CloudWatchFullAccess`
-- `AWSStepFunctionsFullAccess`
-- `AmazonSNSFullAccess`
-- `AWSCloudFormationFullAccess`
+** Work in progress **
+
 
 For production environments, it's recommended to create a custom policy with more restricted permissions following the principle of least privilege.
 
@@ -87,16 +82,14 @@ For production environments, it's recommended to create a custom policy with mor
 
 2. **Using Environment Variables**:
    ```bash
-   export AWS_ACCESS_KEY_ID=your-access-key
-   export AWS_SECRET_ACCESS_KEY=your-secret-key
-   export AWS_REGION=us-east-1
+   export AWS_REGION=eu-central-1
+   export AWS_PROFILE=your-profile-name
    ```
 
 3. **Using .env file** (for local development):
    ```
-   AWS_ACCESS_KEY_ID=your-access-key
-   AWS_SECRET_ACCESS_KEY=your-secret-key
-   AWS_REGION=us-east-1
+   AWS_REGION=eu-central-1
+   AWS_PROFILE=your-profile-name
    ```
 
 ### Deployment

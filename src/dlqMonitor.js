@@ -6,45 +6,59 @@ const cloudWatchLogs = new AWS.CloudWatchLogs();
 // Define log group name
 const LOG_GROUP_NAME = `dlq-example-${process.env.STAGE || 'dev'}-monitorDlq`;
 
+// Store the log stream name for the current Lambda invocation
+let currentLogStreamName = null;
+let logStreamCreated = false;
+
 /**
  * Helper function to log to a specific CloudWatch log group
+ * Uses a single stream per Lambda function invocation
  */
 async function logToCloudWatch(message, logLevel = 'INFO') {
   // Also log to standard Lambda logs for debugging
   console.log(`[${logLevel}] ${message}`);
   
   const timestamp = new Date().getTime();
-  const logStreamName = `dlq-monitor-${timestamp}`;
+  
+  // Create a stream name only once per Lambda invocation
+  if (!currentLogStreamName) {
+    currentLogStreamName = `dlq-monitor-${timestamp}`;
+  }
   
   try {
-    // Create log group if it doesn't exist
-    try {
-      await cloudWatchLogs.createLogGroup({
-        logGroupName: LOG_GROUP_NAME
-      }).promise();
-      console.log(`Created log group: ${LOG_GROUP_NAME}`);
-    } catch (error) {
-      // Ignore if log group already exists
-      if (error.code !== 'ResourceAlreadyExistsException') {
-        console.error('Error creating log group:', error);
+    // Create log group if it doesn't exist (only once)
+    if (!logStreamCreated) {
+      try {
+        await cloudWatchLogs.createLogGroup({
+          logGroupName: LOG_GROUP_NAME
+        }).promise();
+        console.log(`Created log group: ${LOG_GROUP_NAME}`);
+      } catch (error) {
+        // Ignore if log group already exists
+        if (error.code !== 'ResourceAlreadyExistsException') {
+          console.error('Error creating log group:', error);
+        }
       }
     }
     
-    // Create log stream
-    try {
-      await cloudWatchLogs.createLogStream({
-        logGroupName: LOG_GROUP_NAME,
-        logStreamName: logStreamName
-      }).promise();
-    } catch (error) {
-      console.error('Error creating log stream:', error);
-      return; // Exit but don't throw to allow function to continue
+    // Create log stream (only once per Lambda invocation)
+    if (!logStreamCreated) {
+      try {
+        await cloudWatchLogs.createLogStream({
+          logGroupName: LOG_GROUP_NAME,
+          logStreamName: currentLogStreamName
+        }).promise();
+        logStreamCreated = true;
+      } catch (error) {
+        console.error('Error creating log stream:', error);
+        return; // Exit but don't throw to allow function to continue
+      }
     }
     
-    // Put log events
+    // Put log events to the same stream for this invocation
     await cloudWatchLogs.putLogEvents({
       logGroupName: LOG_GROUP_NAME,
-      logStreamName: logStreamName,
+      logStreamName: currentLogStreamName,
       logEvents: [
         {
           timestamp,
@@ -84,18 +98,24 @@ module.exports.handler = async (event) => {
         const approximateFirstReceiveTimestamp = record.attributes.ApproximateFirstReceiveTimestamp;
         const approximateReceiveCount = record.attributes.ApproximateReceiveCount;
         
-        // Log detailed information about the failed task
-        await logToCloudWatch('========== FAILED TASK DETAILS ==========', 'INFO');
-        await logToCloudWatch(`Task ID: ${taskId}`, 'INFO');
-        await logToCloudWatch(`Message ID: ${messageId}`, 'INFO');
-        await logToCloudWatch(`Time in system: ${timeInSystem} seconds`, 'INFO');
-        await logToCloudWatch(`Originally submitted at: ${submittedAt}`, 'INFO');
-        await logToCloudWatch(`Sent to queue at: ${new Date(parseInt(sentTimestamp)).toISOString()}`, 'INFO');
-        await logToCloudWatch(`First received at: ${new Date(parseInt(approximateFirstReceiveTimestamp)).toISOString()}`, 'INFO');
-        await logToCloudWatch(`Total receive count: ${approximateReceiveCount}`, 'INFO');
-        await logToCloudWatch('Payload:', 'INFO');
-        await logToCloudWatch(JSON.stringify(payload, null, 2), 'INFO');
-        await logToCloudWatch('========================================', 'INFO');
+        // Log detailed information about the failed task to a new stream
+        const detailedLogMessage = [
+          '========== FAILED TASK DETAILS ==========',
+          `Task ID: ${taskId}`,
+          `Message ID: ${messageId}`,
+          `Time in system: ${timeInSystem} seconds`,
+          `Originally submitted at: ${submittedAt}`,
+          `Sent to queue at: ${new Date(parseInt(sentTimestamp)).toISOString()}`,
+          `First received at: ${new Date(parseInt(approximateFirstReceiveTimestamp)).toISOString()}`,
+          `Total receive count: ${approximateReceiveCount}`,
+          'Payload:',
+          JSON.stringify(payload, null, 2),
+          '========================================'
+        ].join('\n');
+        console.log(detailedLogMessage);
+        
+        // This will create a new log stream for each failed task
+        await logToCloudWatch(detailedLogMessage, 'ERROR');
         
         // In a real-world scenario, you might want to:
         // 1. Store failed task details in a database

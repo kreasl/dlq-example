@@ -29,8 +29,9 @@ module.exports.handler = async (event) => {
         await new Promise(resolve => setTimeout(resolve, processingTime));
         
         // Randomly fail 30% of runs
-        const shouldFail = Math.random() < 0.3; // 30% of runs will fail
-        
+        // const shouldFail = Math.random() < 0.3; // 30% of runs will fail
+        const shouldFail = Math.random() < 1; // Always fail  
+
         if (shouldFail) {
           console.log(`Task ${taskId} failed (simulated failure, attempt #${approximateReceiveCount})`);
           
@@ -107,8 +108,7 @@ module.exports.handler = async (event) => {
     // tell SQS which messages failed processing so they can be retried or sent to DLQ
     if (failedMessageReceipts.length > 0) {
       console.log(`Reporting ${failedMessageReceipts.length} failed messages to SQS`);
-      console.log('Failed receipt handles:', failedMessageReceipts);
-      
+
       return {
         batchItemFailures: failedMessageReceipts.map(receipt => ({
           itemIdentifier: receipt
